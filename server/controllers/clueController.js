@@ -443,7 +443,9 @@ const submitProof = async (req, res) => {
             driveLinks[0] || null;
 
         // No local uploads are stored anymore.
-        progress.proof = [];
+        progress.proof = driveFileIds.map(
+            (fileId) => `/api/assets/${fileId}`
+        );
 
         // Submission remains pending until admin approval.
         progress.status = "pending";
