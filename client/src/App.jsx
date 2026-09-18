@@ -5,7 +5,7 @@ import HomePage       from './pages/HomePage';
 import RegisterPage   from './pages/RegisterPage';
 import TeamLoginPage  from './pages/TeamLoginPage';
 import GamePage       from './pages/GamePage';
-import LeaderboardPage from './pages/LeaderboardPage';
+// import LeaderboardPage from './pages/LeaderboardPage';
 
 // Admin pages
 import AdminDashboard    from './pages/admin/AdminDashboard';
@@ -25,7 +25,7 @@ export default function App() {
         <Route path="/register"   element={<RegisterPage />} />
         <Route path="/team"       element={<TeamLoginPage />} />
         <Route path="/game"       element={<GamePage />} />
-        <Route path="/leaderboard" element={<LeaderboardPage />} />
+        {/* <Route path="/leaderboard" element={<LeaderboardPage />} /> */}
 
         {/* Admin routes */}
         <Route path="/admin/login"          element={<AdminLoginPage />} />
