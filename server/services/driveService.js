@@ -9,6 +9,7 @@
  */
 
 const path = require("path");
+const { Readable } = require("stream");
 const { google } = require("googleapis");
 
 // Root Drive folder
@@ -224,6 +225,14 @@ const uploadProofToDrive = async ({
         return null;
     }
 
+    if (!buffer || !Buffer.isBuffer(buffer)) {
+        console.error(
+            `[drive] Invalid proof buffer for team ${team.teamCode}`
+        );
+
+        return null;
+    }
+
     const folderId =
         await ensureTeamFolder(team);
 
@@ -246,6 +255,21 @@ const uploadProofToDrive = async ({
                 stage ?? 0
             ).padStart(2, "0")}-${label}-${Date.now()}${ext}`;
 
+        /*
+         * IMPORTANT:
+         *
+         * googleapis expects media.body to be a readable stream
+         * in this environment.
+         *
+         * Buffer directly causes:
+         *
+         *   part.body.pipe is not a function
+         *
+         * Therefore convert the Buffer into a stream.
+         */
+        const fileStream =
+            Readable.from(buffer);
+
         const created =
             await getDrive().files.create({
                 requestBody: {
@@ -258,7 +282,7 @@ const uploadProofToDrive = async ({
                         mimetype ||
                         "application/octet-stream",
 
-                    body: buffer
+                    body: fileStream
                 },
 
                 fields:
@@ -274,7 +298,7 @@ const uploadProofToDrive = async ({
             fileId: created.data.id,
             name: created.data.name,
             webViewLink:
-                created.data.webViewLink
+                created.data.webViewLink || null
         };
 
     } catch (error) {
@@ -291,6 +315,7 @@ const uploadProofToDrive = async ({
 // ------------------------------------------------------------
 // Legacy local-proof sync
 // ------------------------------------------------------------
+
 // Kept for compatibility with OLD submissions that still contain
 // local /uploads/... paths.
 //
@@ -308,16 +333,19 @@ const syncLocalProofToDrive = async () => {
 // ------------------------------------------------------------
 // Decorate submissions with Drive links
 // ------------------------------------------------------------
+
 // New submissions already contain driveFileIds/driveLinks,
 // so there is nothing to upload here.
 
 const decorateSubmissionsWithDriveLinks =
     async (submissions) => {
+
         if (!Array.isArray(submissions)) {
             return;
         }
 
         for (const submission of submissions) {
+
             if (!submission) {
                 continue;
             }
@@ -328,6 +356,7 @@ const decorateSubmissionsWithDriveLinks =
                 ) &&
                 submission.driveFileIds.length > 0
             ) {
+
                 submission.driveFileId =
                     submission.driveFileIds[0];
 
@@ -357,6 +386,7 @@ const decorateSubmissionsWithDriveLinks =
 // ------------------------------------------------------------
 
 const listChildren = async (folderId) => {
+
     const drive = getDrive();
 
     if (!drive || !folderId) {
@@ -368,6 +398,7 @@ const listChildren = async (folderId) => {
     let pageToken = undefined;
 
     do {
+
         const res =
             await drive.files.list({
                 q:
@@ -396,9 +427,11 @@ const listChildren = async (folderId) => {
     return out;
 };
 
+
 // "Clue 10 .mp3" -> "clue10"
 // "Set-2" -> "set2"
 // "clue 6" -> "clue6"
+
 const normName = (name) =>
     String(name || "")
         .toLowerCase()
@@ -407,7 +440,9 @@ const normName = (name) =>
         .replace(/^copyof/, "")
         .trim();
 
+
 const cacheGet = (key) => {
+
     const hit =
         clueLookupCache.get(key);
 
@@ -424,7 +459,9 @@ const cacheGet = (key) => {
     return null;
 };
 
+
 const cacheSet = (key, value) => {
+
     clueLookupCache.set(key, {
         at: Date.now(),
         value
@@ -433,11 +470,13 @@ const cacheSet = (key, value) => {
     return value;
 };
 
+
 // ------------------------------------------------------------
 // Find clue root folder
 // ------------------------------------------------------------
 
 const findClueRootFolder = async () => {
+
     const cacheKey =
         `root:${CLUE_ROOT_NAME}`;
 
@@ -455,6 +494,7 @@ const findClueRootFolder = async () => {
     }
 
     try {
+
         const res =
             await drive.files.list({
                 q:
@@ -463,7 +503,8 @@ const findClueRootFolder = async () => {
                         "\\'"
                     )}' and trashed = false and mimeType = 'application/vnd.google-apps.folder'`,
 
-                fields: "files(id, name)",
+                fields:
+                    "files(id, name)",
 
                 supportsAllDrives: true,
                 includeItemsFromAllDrives: true,
@@ -484,6 +525,7 @@ const findClueRootFolder = async () => {
         );
 
     } catch (error) {
+
         console.error(
             "[drive] Could not find clue root folder:",
             error.response?.data ||
@@ -494,11 +536,13 @@ const findClueRootFolder = async () => {
     }
 };
 
+
 // ------------------------------------------------------------
 // Find set folder
 // ------------------------------------------------------------
 
 const findSetFolder = async (setName) => {
+
     const cacheKey =
         `set:${setName}`;
 
@@ -517,6 +561,7 @@ const findSetFolder = async (setName) => {
     }
 
     try {
+
         const children =
             await listChildren(rootId);
 
@@ -540,6 +585,7 @@ const findSetFolder = async (setName) => {
         );
 
     } catch (error) {
+
         console.error(
             `[drive] Could not list set folders under clue root:`,
             error.response?.data ||
@@ -549,6 +595,7 @@ const findSetFolder = async (setName) => {
         return null;
     }
 };
+
 
 /**
  * Resolve a clue asset by name:
@@ -563,6 +610,7 @@ const findSetFolder = async (setName) => {
 
 const resolveClueByName =
     async (setName, stage) => {
+
         const cacheKey =
             `clue:${setName}:${stage}`;
 
@@ -581,6 +629,7 @@ const resolveClueByName =
         }
 
         try {
+
             const children =
                 await listChildren(
                     setFolderId
@@ -597,6 +646,7 @@ const resolveClueByName =
                 );
 
             if (!match) {
+
                 console.warn(
                     `[drive] No file named "clue ${stage}" in ${setName}`
                 );
@@ -612,6 +662,7 @@ const resolveClueByName =
                 match.mimeType ===
                 "application/vnd.google-apps.folder"
             ) {
+
                 const inner =
                     await listChildren(
                         match.id
@@ -625,6 +676,7 @@ const resolveClueByName =
                     );
 
                 if (!first) {
+
                     console.warn(
                         `[drive] "clue ${stage}" folder in ${setName} is empty`
                     );
@@ -638,8 +690,12 @@ const resolveClueByName =
                 return cacheSet(
                     cacheKey,
                     {
-                        fileId: first.id,
-                        name: first.name,
+                        fileId:
+                            first.id,
+
+                        name:
+                            first.name,
+
                         mimeType:
                             first.mimeType
                     }
@@ -649,14 +705,19 @@ const resolveClueByName =
             return cacheSet(
                 cacheKey,
                 {
-                    fileId: match.id,
-                    name: match.name,
+                    fileId:
+                        match.id,
+
+                    name:
+                        match.name,
+
                     mimeType:
                         match.mimeType
                 }
             );
 
         } catch (error) {
+
             console.error(
                 `[drive] resolveClueByName(${setName}, ${stage}) failed:`,
                 error.response?.data ||
@@ -666,6 +727,7 @@ const resolveClueByName =
             return null;
         }
     };
+
 
 // ------------------------------------------------------------
 // Exports
