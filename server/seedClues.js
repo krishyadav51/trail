@@ -48,7 +48,7 @@ const clues = [
         assets: [
             {
                 name: "clue 1",
-                url: driveImageUrl("1slvxTa5yptU1ZcxKKWm7wsgRUFM27ino"),
+                url: driveImageUrl("1J4UpQ27XqOpxRuiYAF_4DwCKwjxtJ7Ab"),
                 assetType: "image"
             }
         ]
@@ -86,12 +86,12 @@ const clues = [
         stage: 4,
         set: "set1",
         title: "Clue 4",
-        type: "image",
+        type: "video",
         assets: [
             {
                 name: "clue 4",
                 url: driveImageUrl("1vy2cZw2OD38Fu8Wn96hfYwE1JMCSiGdl"),
-                assetType: "image"
+                assetType: "video"
             }
         ]
     },
@@ -236,7 +236,7 @@ const clues = [
         assets: [
             {
                 name: "clue 3",
-                url: driveImageUrl("1ID61lf492viixmJlmtWBOXNHHIwP7eU8"),
+                url: driveImageUrl("1hLa68EyFIXxdbx6P1tQAYSpRN5BqhVuO"),
                 assetType: "image"
             }
         ]
@@ -382,7 +382,7 @@ const clues = [
         assets: [
             {
                 name: "clue 2",
-                url: driveImageUrl("1mqkP8xPQZiz2D8N4x-IcHzR35dzhy9Ji"),
+                url: driveImageUrl("1QPvH_-9_YnIQYQ1x_8NmTPLf-_rN4umi"),
                 assetType: "image"
             }
         ]
