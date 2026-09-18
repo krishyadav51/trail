@@ -1,7 +1,6 @@
 const Team = require("../models/Team");
 const TeamProgress = require("../models/TeamProgress");
 const Clue = require("../models/Clue");
-const path = require("path");
 
 // Marks awarded to the first team that reaches a stage (stage 1..10).
 const STAGE_BONUS = 20;
@@ -18,11 +17,6 @@ const formatDuration = (ms) => {
 
     return `${mins}m ${String(secs).padStart(2, "0")}s`;
 };
-
-const {
-    uploadProofToDrive,
-    isConfigured: driveConfigured
-} = require("../services/driveService");
 
 
 // -----------------------------
@@ -123,28 +117,41 @@ const getPendingSubmissions = async (req, res) => {
         const submissions = await TeamProgress.find({
             status: "pending"
         })
-            .populate("team", "teamName teamCode driveFolderId")
-            .populate("clue", "stage title points")
-            .sort({ submittedAt: 1 });
+            .populate(
+                "team",
+                "teamName teamCode driveFolderId"
+            )
+            .populate(
+                "clue",
+                "stage title points"
+            )
+            .sort({
+                submittedAt: 1
+            });
 
         /*
          * IMPORTANT:
          *
-         * Do NOT upload pending proofs to Google Drive here.
+         * Proofs are now uploaded directly to Google Drive
+         * when the participant submits them.
          *
-         * Admin should only see the locally stored proof.
-         * Google Drive upload happens ONLY after approval.
+         * Therefore:
+         * - Do NOT upload anything here.
+         * - Do NOT look for /uploads files.
+         * - Admin receives the existing Drive IDs and links.
          */
 
         res.status(200).json({
             message: "Pending submissions fetched successfully",
             count: submissions.length,
-            driveConfigured: driveConfigured(),
             submissions
         });
 
     } catch (error) {
-        console.error("Get pending submissions error:", error);
+        console.error(
+            "Get pending submissions error:",
+            error
+        );
 
         res.status(500).json({
             message: "Failed to fetch pending submissions",
@@ -163,13 +170,17 @@ const rejectSubmission = async (req, res) => {
         const { progressId } = req.params;
         const { rejectionReason } = req.body;
 
-        if (!rejectionReason || !rejectionReason.trim()) {
+        if (
+            !rejectionReason ||
+            !rejectionReason.trim()
+        ) {
             return res.status(400).json({
                 message: "Please provide a rejection reason"
             });
         }
 
-        const progress = await TeamProgress.findById(progressId);
+        const progress =
+            await TeamProgress.findById(progressId);
 
         if (!progress) {
             return res.status(404).json({
@@ -179,27 +190,36 @@ const rejectSubmission = async (req, res) => {
 
         if (progress.status !== "pending") {
             return res.status(400).json({
-                message: "Only pending submissions can be rejected"
+                message:
+                    "Only pending submissions can be rejected"
             });
         }
 
         /*
-         * IMPORTANT:
-         *
          * Rejecting a proof does NOT upload anything
          * to Google Drive.
+         *
+         * The already uploaded Drive proof remains
+         * associated with this submission.
          */
 
         progress.status = "rejected";
-        progress.rejectionReason = rejectionReason.trim();
-        progress.rejectionCount = (progress.rejectionCount || 0) + 1;
+        progress.rejectionReason =
+            rejectionReason.trim();
+
+        progress.rejectionCount =
+            (progress.rejectionCount || 0) + 1;
 
         await progress.save();
 
-        // Track total rejections on the team for the admin panel
+        // Track total rejections on the team
         await Team.updateOne(
             { _id: progress.team },
-            { $inc: { rejectionCount: 1 } }
+            {
+                $inc: {
+                    rejectionCount: 1
+                }
+            }
         );
 
         res.status(200).json({
@@ -208,13 +228,24 @@ const rejectSubmission = async (req, res) => {
             progress: {
                 stage: progress.stage,
                 status: progress.status,
-                rejectionReason: progress.rejectionReason,
-                submittedAt: progress.submittedAt
+                rejectionReason:
+                    progress.rejectionReason,
+                submittedAt:
+                    progress.submittedAt,
+
+                driveFileIds:
+                    progress.driveFileIds || [],
+
+                driveLinks:
+                    progress.driveLinks || []
             }
         });
 
     } catch (error) {
-        console.error("Reject submission error:", error);
+        console.error(
+            "Reject submission error:",
+            error
+        );
 
         res.status(500).json({
             message: "Failed to reject submission",
@@ -232,9 +263,10 @@ const approveSubmission = async (req, res) => {
     try {
         const { progressId } = req.params;
 
-        const progress = await TeamProgress.findById(progressId)
-            .populate("team")
-            .populate("clue");
+        const progress =
+            await TeamProgress.findById(progressId)
+                .populate("team")
+                .populate("clue");
 
         if (!progress) {
             return res.status(404).json({
@@ -244,7 +276,8 @@ const approveSubmission = async (req, res) => {
 
         if (progress.status !== "pending") {
             return res.status(400).json({
-                message: "Only pending submissions can be approved"
+                message:
+                    "Only pending submissions can be approved"
             });
         }
 
@@ -253,388 +286,338 @@ const approveSubmission = async (req, res) => {
 
         if (!team) {
             return res.status(400).json({
-                message: "Team associated with this submission was not found"
+                message:
+                    "Team associated with this submission was not found"
             });
         }
 
         if (!clue) {
             return res.status(400).json({
-                message: "Clue associated with this submission was not found"
-            });
-        }
-
-
-        // -----------------------------
-        // Google Drive validation
-        // -----------------------------
-
-        if (!driveConfigured()) {
-            return res.status(500).json({
                 message:
-                    "Google Drive is not configured. Submission remains pending."
+                    "Clue associated with this submission was not found"
             });
         }
 
 
         // -----------------------------
-        // Get submitted proof files
+        // Get existing Google Drive proof
         // -----------------------------
 
         /*
-         * TeamProgress.proof is:
+         * IMPORTANT:
          *
-         * [
-         *     "/uploads/file1.png",
-         *     "/uploads/file2.png"
-         * ]
+         * Proofs are uploaded to Google Drive
+         * BEFORE admin approval.
+         *
+         * Therefore approval must NOT:
+         *
+         * - read files from /uploads
+         * - use fs
+         * - use local file paths
+         * - upload the files again
          */
 
-        const proofFiles = Array.isArray(progress.proof)
-            ? progress.proof
-            : [];
+        let driveFileIds =
+            Array.isArray(progress.driveFileIds)
+                ? progress.driveFileIds.filter(Boolean)
+                : [];
 
-        if (proofFiles.length === 0) {
+        let driveLinks =
+            Array.isArray(progress.driveLinks)
+                ? progress.driveLinks
+                : [];
+
+
+        // Support older single-file records
+        if (
+            driveFileIds.length === 0 &&
+            progress.driveFileId
+        ) {
+            driveFileIds = [
+                progress.driveFileId
+            ];
+        }
+
+        if (
+            driveLinks.length === 0 &&
+            progress.driveLink
+        ) {
+            driveLinks = [
+                progress.driveLink
+            ];
+        }
+
+
+        // -----------------------------
+        // Verify proof exists
+        // -----------------------------
+
+        if (driveFileIds.length === 0) {
             return res.status(400).json({
                 message:
-                    "No proof images were found for this submission. Submission remains pending."
+                    "No Google Drive proof was found for this submission. Submission remains pending.",
+                driveUploaded: false
             });
         }
 
 
         // -----------------------------
-        // Upload proofs to Google Drive
-        // ONLY AFTER ADMIN APPROVAL
+        // Approve submission
         // -----------------------------
 
-        const driveFileIds = [];
-        const driveLinks = [];
-
-        try {
-
-            for (let i = 0; i < proofFiles.length; i++) {
-
-                const storedPath = proofFiles[i];
-
-                if (
-                    !storedPath ||
-                    typeof storedPath !== "string"
-                ) {
-                    throw new Error(
-                        `Proof ${i + 1} does not contain a valid file path`
-                    );
-                }
+        const approvalTime = new Date();
 
 
-                // -----------------------------
-                // Convert URL path to local path
-                // -----------------------------
+        // -----------------------------
+        // Per-clue time taken
+        // -----------------------------
 
-                let filePath = storedPath;
-
-                if (filePath.startsWith("/uploads/")) {
-                    filePath = path.join(
-                        process.cwd(),
-                        filePath.replace(/^\/+/, "")
-                    );
-                }
-
-
-                // -----------------------------
-                // Determine MIME type
-                // -----------------------------
-
-                let mimetype = "image/jpeg";
-
-                const extension = path
-                    .extname(filePath)
-                    .toLowerCase();
-
-                if (extension === ".png") {
-                    mimetype = "image/png";
-                } else if (
-                    extension === ".jpg" ||
-                    extension === ".jpeg"
-                ) {
-                    mimetype = "image/jpeg";
-                } else if (extension === ".webp") {
-                    mimetype = "image/webp";
-                }
+        const timeTakenMs = progress.unlockedAt
+            ? Math.max(
+                0,
+                approvalTime -
+                new Date(progress.unlockedAt)
+            )
+            : null;
 
 
-                // -----------------------------
-                // Upload to Google Drive
-                // -----------------------------
+        progress.status = "approved";
+        progress.approvedAt = approvalTime;
+        progress.score = clue.points;
+        progress.timeTakenMs = timeTakenMs;
 
-                const uploaded = await uploadProofToDrive({
-                    team,
-                    filePath,
-                    mimetype,
-                    stage: progress.stage,
+        // Make sure Drive data is preserved
+        progress.driveFileIds = driveFileIds;
+        progress.driveLinks = driveLinks;
 
-                    /*
-                     * Start proof numbering from 1.
-                     *
-                     * proof 1
-                     * proof 2
-                     */
+        // Legacy single-file fields
+        progress.driveFileId =
+            driveFileIds[0] || null;
 
-                    proofIndex: i + 1
-                });
+        progress.driveLink =
+            driveLinks[0] || null;
+
+        await progress.save();
 
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * driveService.js returns:
-                 *
-                 * {
-                 *     fileId,
-                 *     name,
-                 *     webViewLink
-                 * }
-                 *
-                 * So use uploaded.fileId,
-                 * NOT uploaded.id.
-                 */
+        // -----------------------------
+        // Add points to team
+        // -----------------------------
 
-                if (!uploaded || !uploaded.fileId) {
-                    throw new Error(
-                        `Google Drive upload failed for proof ${i + 1}`
-                    );
-                }
+        team.score =
+            (team.score || 0) +
+            clue.points;
 
 
-                driveFileIds.push(
-                    uploaded.fileId
-                );
+        // -----------------------------
+        // Final clue?
+        // -----------------------------
 
-                driveLinks.push(
-                    uploaded.webViewLink || null
-                );
-            }
+        let bonusAwarded = 0;
 
+        if (progress.stage === 10) {
+
+            team.status = "completed";
+            team.completedAt = approvalTime;
+
+            await team.save();
+
+        } else {
 
             // -----------------------------
-            // ALL uploads succeeded
+            // Unlock next clue
             // -----------------------------
 
-            progress.driveFileIds = driveFileIds;
-            progress.driveLinks = driveLinks;
+            const nextStage =
+                progress.stage + 1;
 
-            /*
-             * Legacy single-file fields.
-             *
-             * These are kept for compatibility
-             * with older frontend code.
-             */
+            team.currentStage = nextStage;
 
-            progress.driveFileId =
-                driveFileIds[0] || null;
-
-            progress.driveLink =
-                driveLinks[0] || null;
+            await team.save();
 
 
-            // -----------------------------
-            // Approve submission
-            // -----------------------------
-
-            /*
-             * IMPORTANT:
-             *
-             * We reach this point ONLY if every
-             * proof image was successfully uploaded.
-             */
-
-            const approvalTime = new Date();
-
-            // -----------------------------
-            // Per-clue time taken (unlock → approval)
-            // -----------------------------
-
-            const timeTakenMs = progress.unlockedAt
-                ? Math.max(0, approvalTime - new Date(progress.unlockedAt))
-                : null;
-
-            progress.status = "approved";
-            progress.approvedAt = approvalTime;
-            progress.score = clue.points;
-            progress.timeTakenMs = timeTakenMs;
-
-            await progress.save();
-
-
-            // -----------------------------
-            // Add points to team
-            // -----------------------------
-
-            team.score += clue.points;
-
-
-            // -----------------------------
-            // Final clue?
-            // -----------------------------
-
-            let bonusAwarded = 0;
-
-            if (progress.stage === 10) {
-
-                team.status = "completed";
-                team.completedAt = approvalTime;
-
-                await team.save();
-
-            } else {
-
-                // -----------------------------
-                // Unlock next clue
-                // -----------------------------
-
-                const nextStage = progress.stage + 1;
-
-                team.currentStage = nextStage;
-
-                await team.save();
-
-                const nextClue = await Clue.findOne({
+            const nextClue =
+                await Clue.findOne({
                     stage: nextStage,
                     set: team.clueSet,
                     isActive: true
                 });
 
-                if (nextClue) {
-                    await TeamProgress.create({
-                        team: team._id,
-                        clue: nextClue._id,
-                        stage: nextStage,
-                        status: "unlocked",
-                        unlockedAt: approvalTime
-                    });
-                }
 
-                // -----------------------------
-                // First-to-reach bonus (stage 1 and beyond)
-                // -----------------------------
+            if (nextClue) {
 
-                /*
-                 * This team just ARRIVED at nextStage — the +20 goes to
-                 * the first arrival: no other team may have claimed the
-                 * bonus for this stage yet, and no other team may have
-                 * unlocked it earlier. Runs AFTER this team's progress
-                 * row exists so ties compare real unlockedAt values.
-                 */
+                await TeamProgress.create({
+                    team: team._id,
+                    clue: nextClue._id,
+                    stage: nextStage,
+                    status: "unlocked",
+                    unlockedAt: approvalTime
+                });
 
-                if (nextStage >= 1 && nextStage <= 10) {
-                    const bonusClaimed = await TeamProgress.exists({
-                        stage: nextStage,
-                        team: { $ne: team._id },
-                        bonusAwarded: { $gt: 0 }
-                    });
-
-                    const earlierArrival = await TeamProgress.findOne({
-                        stage: nextStage,
-                        team: { $ne: team._id },
-                        unlockedAt: { $ne: null, $lt: approvalTime }
-                    })
-                        .sort({ unlockedAt: 1 })
-                        .limit(1);
-
-                    const bonusProgress = await TeamProgress.findOne({
-                        team: team._id,
-                        stage: nextStage
-                    });
-
-                    if (
-                        !bonusClaimed &&
-                        !earlierArrival &&
-                        bonusProgress &&
-                        !bonusProgress.bonusAwarded
-                    ) {
-                        bonusProgress.bonusAwarded = STAGE_BONUS;
-                        await bonusProgress.save();
-
-                        team.bonusPoints =
-                            (team.bonusPoints || 0) + STAGE_BONUS;
-                        team.score += STAGE_BONUS;
-                        bonusAwarded = STAGE_BONUS;
-
-                        await team.save();
-                    }
-                }
             }
 
 
             // -----------------------------
-            // Success response
+            // First-to-reach bonus
             // -----------------------------
 
-            return res.status(200).json({
-
-                message:
-                    bonusAwarded > 0
-                        ? `Submission approved — +${STAGE_BONUS} FIRST-TO-REACH bonus for stage ${progress.stage + 1}!`
-                        : "Submission approved and proofs uploaded to Google Drive successfully",
-
-                driveUploaded: true,
-
-                driveFileIds,
-                driveLinks,
-
-                team: {
-                    teamName: team.teamName,
-                    teamCode: team.teamCode,
-                    currentStage: team.currentStage,
-                    score: team.score,
-                    bonusPoints: team.bonusPoints || 0,
-                    bonusAwardedThisStage: bonusAwarded,
-                    status: team.status,
-                    completedAt: team.completedAt
-                },
-
-                progress: {
-                    stage: progress.stage,
-                    status: progress.status,
-                    score: progress.score,
-                    timeTakenMs: progress.timeTakenMs,
-                    timeTakenText: formatDuration(progress.timeTakenMs),
-                    submittedAt: progress.submittedAt,
-                    approvedAt: progress.approvedAt,
-
-                    driveFileIds:
-                        progress.driveFileIds,
-
-                    driveLinks:
-                        progress.driveLinks
-                }
-            });
-
-        } catch (driveError) {
-
             /*
-             * IMPORTANT:
+             * This team just arrived at nextStage.
              *
-             * If even ONE Drive upload fails:
-             *
-             * - Do NOT approve
-             * - Do NOT give points
-             * - Do NOT unlock next clue
-             * - Keep submission pending
+             * +20 goes to the first arrival.
              */
 
-            console.error(
-                "Google Drive upload failed during approval:",
-                driveError
-            );
+            if (
+                nextStage >= 1 &&
+                nextStage <= 10
+            ) {
 
-            return res.status(500).json({
-                message:
-                    "Google Drive upload failed. Submission remains pending and has NOT been approved.",
+                const bonusClaimed =
+                    await TeamProgress.exists({
+                        stage: nextStage,
 
-                error: driveError.message,
+                        team: {
+                            $ne: team._id
+                        },
 
-                driveUploaded: false
-            });
+                        bonusAwarded: {
+                            $gt: 0
+                        }
+                    });
+
+
+                const earlierArrival =
+                    await TeamProgress.findOne({
+                        stage: nextStage,
+
+                        team: {
+                            $ne: team._id
+                        },
+
+                        unlockedAt: {
+                            $ne: null,
+                            $lt: approvalTime
+                        }
+                    })
+                        .sort({
+                            unlockedAt: 1
+                        })
+                        .limit(1);
+
+
+                const bonusProgress =
+                    await TeamProgress.findOne({
+                        team: team._id,
+                        stage: nextStage
+                    });
+
+
+                if (
+                    !bonusClaimed &&
+                    !earlierArrival &&
+                    bonusProgress &&
+                    !bonusProgress.bonusAwarded
+                ) {
+
+                    bonusProgress.bonusAwarded =
+                        STAGE_BONUS;
+
+                    await bonusProgress.save();
+
+
+                    team.bonusPoints =
+                        (team.bonusPoints || 0) +
+                        STAGE_BONUS;
+
+                    team.score += STAGE_BONUS;
+
+                    bonusAwarded =
+                        STAGE_BONUS;
+
+                    await team.save();
+                }
+            }
         }
+
+
+        // -----------------------------
+        // Success response
+        // -----------------------------
+
+        return res.status(200).json({
+
+            message:
+                bonusAwarded > 0
+                    ? `Submission approved — +${STAGE_BONUS} FIRST-TO-REACH bonus for stage ${progress.stage + 1}!`
+                    : "Submission approved successfully",
+
+            // Proof was already uploaded during submission
+            driveUploaded: true,
+
+            driveFileIds,
+            driveLinks,
+
+
+            team: {
+                teamName:
+                    team.teamName,
+
+                teamCode:
+                    team.teamCode,
+
+                currentStage:
+                    team.currentStage,
+
+                score:
+                    team.score,
+
+                bonusPoints:
+                    team.bonusPoints || 0,
+
+                bonusAwardedThisStage:
+                    bonusAwarded,
+
+                status:
+                    team.status,
+
+                completedAt:
+                    team.completedAt
+            },
+
+
+            progress: {
+
+                stage:
+                    progress.stage,
+
+                status:
+                    progress.status,
+
+                score:
+                    progress.score,
+
+                timeTakenMs:
+                    progress.timeTakenMs,
+
+                timeTakenText:
+                    formatDuration(
+                        progress.timeTakenMs
+                    ),
+
+                submittedAt:
+                    progress.submittedAt,
+
+                approvedAt:
+                    progress.approvedAt,
+
+                driveFileIds:
+                    progress.driveFileIds,
+
+                driveLinks:
+                    progress.driveLinks
+            }
+
+        });
 
     } catch (error) {
 
@@ -647,7 +630,8 @@ const approveSubmission = async (req, res) => {
             message:
                 "Failed to approve submission",
 
-            error: error.message
+            error:
+                error.message
         });
     }
 };
@@ -661,9 +645,10 @@ const startTeamGame = async (req, res) => {
     try {
         const { teamCode } = req.params;
 
-        const team = await Team.findOne({
-            teamCode
-        });
+        const team =
+            await Team.findOne({
+                teamCode
+            });
 
         if (!team) {
             return res.status(404).json({
@@ -671,28 +656,61 @@ const startTeamGame = async (req, res) => {
             });
         }
 
+
+        // -----------------------------
+        // Allocate clue set if missing
+        // -----------------------------
+
         if (!team.clueSet) {
 
-            // Team registered after the bulk allocation
-            // Assign the least-loaded set that actually has clues
+            // Team registered after bulk allocation.
+            // Assign the least-loaded set
+            // that actually has clues.
 
-            const counts = await Clue.aggregate([
-                { $match: { isActive: true } },
-                { $group: { _id: "$set", total: { $sum: 1 } } }
-            ]);
+            const counts =
+                await Clue.aggregate([
+                    {
+                        $match: {
+                            isActive: true
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: "$set",
+                            total: {
+                                $sum: 1
+                            }
+                        }
+                    }
+                ]);
 
-            const setMap = Object.fromEntries(
-                counts.map((c) => [c._id, c.total])
-            );
+
+            const setMap =
+                Object.fromEntries(
+                    counts.map((c) => [
+                        c._id,
+                        c.total
+                    ])
+                );
+
 
             team.clueSet =
                 ["set1", "set2", "set3"]
                     .sort(
                         (a, b) =>
-                            (setMap[a] || 0) - (setMap[b] || 0)
+                            (setMap[a] || 0) -
+                            (setMap[b] || 0)
                     )
-                    .find((s) => (setMap[s] || 0) > 0) || "set1";
+                    .find(
+                        (s) =>
+                            (setMap[s] || 0) > 0
+                    ) || "set1";
         }
+
+
+        // -----------------------------
+        // Prevent starting twice
+        // -----------------------------
 
         if (team.startedAt) {
             return res.status(400).json({
@@ -703,6 +721,11 @@ const startTeamGame = async (req, res) => {
                     team.startedAt
             });
         }
+
+
+        // -----------------------------
+        // Team must be active
+        // -----------------------------
 
         if (team.status !== "active") {
             return res.status(400).json({
@@ -728,11 +751,12 @@ const startTeamGame = async (req, res) => {
         // Find Clue 0
         // -----------------------------
 
-        const clue = await Clue.findOne({
-            stage: 0,
-            set: team.clueSet,
-            isActive: true
-        });
+        const clue =
+            await Clue.findOne({
+                stage: 0,
+                set: team.clueSet,
+                isActive: true
+            });
 
         if (!clue) {
             return res.status(404).json({
@@ -750,6 +774,7 @@ const startTeamGame = async (req, res) => {
                 team: team._id,
                 stage: 0
             });
+
 
         if (!existingProgress) {
 
@@ -774,19 +799,38 @@ const startTeamGame = async (req, res) => {
                 "Game started successfully",
 
             team: {
-                teamName: team.teamName,
-                teamCode: team.teamCode,
-                clueSet: team.clueSet,
-                currentStage: team.currentStage,
-                score: team.score,
-                status: team.status,
-                startedAt: team.startedAt
+
+                teamName:
+                    team.teamName,
+
+                teamCode:
+                    team.teamCode,
+
+                clueSet:
+                    team.clueSet,
+
+                currentStage:
+                    team.currentStage,
+
+                score:
+                    team.score,
+
+                status:
+                    team.status,
+
+                startedAt:
+                    team.startedAt
             },
 
             clue: {
-                stage: clue.stage,
-                title: clue.title
+
+                stage:
+                    clue.stage,
+
+                title:
+                    clue.title
             }
+
         });
 
     } catch (error) {

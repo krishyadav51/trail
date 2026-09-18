@@ -2,8 +2,11 @@ const Team = require("../models/Team");
 const Clue = require("../models/Clue");
 const TeamProgress = require("../models/TeamProgress");
 const multer = require("multer");
-const path = require("path");
-const { resolveClueByName } = require("../services/driveService");
+
+const {
+    resolveClueByName,
+    uploadProofToDrive
+} = require("../services/driveService");
 
 // Hint shown to every team while viewing stage 7 (the PDF stage).
 const STAGE_7_HINT =
@@ -12,27 +15,12 @@ const STAGE_7_HINT =
 // -----------------------------
 // Multer configuration
 // -----------------------------
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, "uploads/");
-    },
-
-    filename: (req, file, cb) => {
-        const uniqueName =
-            Date.now() +
-            "-" +
-            Math.round(Math.random() * 1E9) +
-            "-" +
-            file.fieldname +
-            path.extname(file.originalname);
-
-        cb(null, uniqueName);
-    }
-});
+// Store uploaded images in memory.
+// This avoids depending on Render's local filesystem.
+const storage = multer.memoryStorage();
 
 const upload = multer({
-    storage: storage,
+    storage,
 
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith("image/")) {
@@ -53,8 +41,9 @@ const upload = multer({
 
 const extractDriveFileId = (driveUrl) => {
     try {
-        // ?id=... style links
         const url = new URL(driveUrl);
+
+        // ?id=... style links
         const queryId = url.searchParams.get("id");
 
         if (queryId) {
@@ -101,9 +90,10 @@ const buildAssetResponse = (driveUrl) => {
     };
 };
 
-// Derive the render type from the Drive file's real mimeType so a
-// video clue renders as a video and a PDF as a document, no matter
-// what type was seeded in MongoDB.
+// -----------------------------
+// Derive asset type from MIME
+// -----------------------------
+
 const assetTypeFromMime = (mimeType) => {
     const mime = String(mimeType || "").toLowerCase();
 
@@ -112,7 +102,7 @@ const assetTypeFromMime = (mimeType) => {
     if (mime.startsWith("audio/")) return "audio";
     if (mime === "application/pdf") return "document";
 
-    return "document"; // safe default: viewer offers a download
+    return "document";
 };
 
 /**
@@ -251,10 +241,12 @@ const getCurrentClue = async (req, res) => {
             });
         }
 
-        // Resolve assets live from Drive by name (fallback: seeded links)
+        // Resolve assets live from Drive by name
+        // Fallback to seeded links if Drive lookup fails.
         const assets = await resolveClueAssets(clue);
 
-        // Hint: prefer per-clue DB value, fall back to the stage-7 default
+        // Hint: prefer per-clue DB value,
+        // fall back to the stage-7 default.
         const hintText =
             clue.hintText ||
             (clue.stage === 7 ? STAGE_7_HINT : null);
@@ -286,7 +278,13 @@ const getCurrentClue = async (req, res) => {
                 unlockedAt: progress.unlockedAt,
                 submittedAt: progress.submittedAt,
                 approvedAt: progress.approvedAt,
-                rejectionReason: progress.rejectionReason
+                rejectionReason: progress.rejectionReason,
+
+                driveFileIds:
+                    progress.driveFileIds || [],
+
+                driveLinks:
+                    progress.driveLinks || []
             }
         });
 
@@ -303,25 +301,23 @@ const getCurrentClue = async (req, res) => {
 // -----------------------------
 // Submit proof
 // -----------------------------
+// Proof is uploaded directly to Google Drive.
+// No dependency on Render's local uploads/ folder.
 
 const submitProof = async (req, res) => {
     try {
         const { teamCode } = req.params;
 
-        const hasFile =
-            Boolean(req.file) ||
-            (
-                req.files &&
-                (
-                    req.files.proof?.length > 0 ||
-                    req.files.proof2?.length > 0
-                )
-            );
+        const files = [
+            ...(req.files?.proof || []),
+            ...(req.files?.proof2 || []),
+            ...(req.file ? [req.file] : [])
+        ].slice(0, 2);
 
-        if (!hasFile) {
+        if (files.length === 0) {
             return res.status(400).json({
                 message:
-                    "Please upload at least one proof image (up to 2)"
+                    "Please upload at least one proof image"
             });
         }
 
@@ -369,7 +365,8 @@ const submitProof = async (req, res) => {
 
         if (!progress) {
             return res.status(400).json({
-                message: "Current clue is not unlocked yet"
+                message:
+                    "Current clue is not unlocked yet"
             });
         }
 
@@ -382,73 +379,109 @@ const submitProof = async (req, res) => {
 
         if (progress.status === "approved") {
             return res.status(400).json({
-                message: "This clue has already been approved"
+                message:
+                    "This clue has already been approved"
             });
         }
 
         // -----------------------------
-        // Get uploaded proof files
+        // Google Drive configuration
         // -----------------------------
 
-        const files = [
-            ...(req.files?.proof || []),
-            ...(req.files?.proof2 || []),
-            ...(req.file ? [req.file] : [])
-        ].slice(0, 2);
-
-        if (files.length === 0) {
-            return res.status(400).json({
-                message: "Please upload a proof image"
+        if (!process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID) {
+            return res.status(500).json({
+                message:
+                    "Google Drive is not configured on the server"
             });
         }
 
         // -----------------------------
-        // Save proof locally
+        // Upload directly to Drive
         // -----------------------------
 
-        progress.proof = files.map(
-            (file) => `/uploads/${file.filename}`
-        );
+        const driveFileIds = [];
+        const driveLinks = [];
 
-        // Proof now waits for admin approval
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+
+            const uploaded = await uploadProofToDrive({
+                team,
+                buffer: file.buffer,
+                mimetype: file.mimetype,
+                originalName: file.originalname,
+                stage: progress.stage,
+                proofIndex: i + 1
+            });
+
+            if (!uploaded || !uploaded.fileId) {
+                return res.status(500).json({
+                    message:
+                        `Failed to upload proof ${i + 1} to Google Drive`
+                });
+            }
+
+            driveFileIds.push(uploaded.fileId);
+
+            driveLinks.push(
+                uploaded.webViewLink || null
+            );
+        }
+
+        // -----------------------------
+        // Save Drive information
+        // -----------------------------
+
+        progress.driveFileIds = driveFileIds;
+        progress.driveLinks = driveLinks;
+
+        // Legacy single-file fields
+        progress.driveFileId =
+            driveFileIds[0] || null;
+
+        progress.driveLink =
+            driveLinks[0] || null;
+
+        // No local uploads are stored anymore.
+        progress.proof = [];
+
+        // Submission remains pending until admin approval.
         progress.status = "pending";
 
         progress.submittedAt = new Date();
 
-        // Clear previous rejection
+        // Clear previous rejection reason.
         progress.rejectionReason = null;
-
-        // -----------------------------
-        // IMPORTANT
-        // -----------------------------
-        // DO NOT upload to Google Drive here.
-        //
-        // Google Drive upload will happen ONLY
-        // when an admin approves this proof.
-        // -----------------------------
 
         await progress.save();
 
-        res.status(200).json({
-            message: "Proof submitted successfully",
+        return res.status(200).json({
+            message:
+                "Proof submitted successfully",
 
             progress: {
                 stage: progress.stage,
                 status: progress.status,
-                proof: progress.proof,
+
                 proofCount: files.length,
 
-                // Drive upload has NOT happened yet.
-                driveUploaded: false,
+                driveUploaded: true,
 
-                submittedAt: progress.submittedAt
+                driveFileIds,
+                driveLinks,
+
+                submittedAt:
+                    progress.submittedAt
             }
         });
 
     } catch (error) {
-        console.error("Submit proof error:", error);
+        console.error(
+            "Submit proof error:",
+            error
+        );
 
-        res.status(500).json({
+        return res.status(500).json({
             message: "Failed to submit proof",
             error: error.message
         });
