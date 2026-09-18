@@ -32,9 +32,9 @@ const normalise = (value) => String(value || "").trim().toLowerCase();
 const adminCredentialsMatch = ({ teamName, teamLeader, leaderRegNo, email, teamMember }) => (
     normalise(teamName) === normalise(process.env.ADMIN_TEAM_NAME || "iquest") &&
     normalise(teamLeader) === normalise(process.env.ADMIN_TEAM_LEADER || "krish") &&
-    normalise(leaderRegNo).toUpperCase() === (process.env.ADMIN_LEADER_REG_NO || "25BCA020").trim().toUpperCase() &&
+    normalise(leaderRegNo).toUpperCase() === (process.env.ADMIN_LEADER_REG_NO || "25BCA0051").trim().toUpperCase() &&
     normalise(email) === normalise(process.env.ADMIN_EMAIL || "ykrishyadav2007@gmail.com") &&
-    normalise(teamMember).toUpperCase() === (process.env.ADMIN_TEAM_MEMBER || "25BCA015").trim().toUpperCase()
+    normalise(teamMember).toUpperCase() === (process.env.ADMIN_TEAM_MEMBER || "25BCA0015").trim().toUpperCase()
 );
 
 const requireAdmin = (req, res, next) => {
