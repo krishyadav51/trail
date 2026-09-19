@@ -104,7 +104,7 @@ const clues = [
         assets: [
             {
                 name: "clue 5",
-                url: driveImageUrl("1cUHeAGN_uQEXZzc6ZVLWdJeED_BNHEN8"),
+                url: driveImageUrl("1GYauTR3hnl8DfLPK0ZOz4GreYsoiEU6u"),
                 assetType: "image"
             }
         ]
@@ -175,7 +175,7 @@ const clues = [
         assets: [
             {
                 name: "clue 10",
-                url: driveDownloadUrl("1kuoVwChOFuWZN8vEBd-2lRJYMOQWLHLx"),
+                url: driveDownloadUrl("1RrZHBQGnGnPM1rnELpZI9hzzHqqiV_WV"),
                 assetType: "audio"
             }
         ]
@@ -335,7 +335,7 @@ const clues = [
         assets: [
             {
                 name: "clue 10",
-                url: driveDownloadUrl("1kuoVwChOFuWZN8vEBd-2lRJYMOQWLHLx"),
+                url: driveDownloadUrl("1RrZHBQGnGnPM1rnELpZI9hzzHqqiV_WV"),
                 assetType: "audio"
             }
         ]
@@ -495,7 +495,7 @@ const clues = [
         assets: [
             {
                 name: "clue 10",
-                url: driveDownloadUrl("1kuoVwChOFuWZN8vEBd-2lRJYMOQWLHLx"),
+                url: driveDownloadUrl("1RrZHBQGnGnPM1rnELpZI9hzzHqqiV_WV"),
                 assetType: "audio"
             }
         ]
