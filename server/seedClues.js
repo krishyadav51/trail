@@ -129,7 +129,14 @@ const clues = [
         set: "set1",
         title: "Clue 7",
         type: "document",
-        hintText: "The lock remembers where you began",
+        hintText: `A guarded door now waits in silence,
+                Its secret hidden behind a line of defiance.
+                You could chase new words and wander around,
+                Or seek what was lost on familiar ground.
+                The trail you followed may hold a key,
+                In something you passed without letting it be.
+                What once helped you move from one place to another,
+                May now be the word that unlocks the other.`,
         assets: [
             {
                 name: "clue 7",
@@ -289,7 +296,14 @@ const clues = [
         set: "set2",
         title: "Clue 7",
         type: "document",
-        hintText: "The lock remembers where you began",
+        hintText: `A guarded door now waits in silence,
+                Its secret hidden behind a line of defiance.
+                You could chase new words and wander around,
+                Or seek what was lost on familiar ground.
+                The trail you followed may hold a key,
+                In something you passed without letting it be.
+                What once helped you move from one place to another,
+                May now be the word that unlocks the other.`,
         assets: [
             {
                 name: "clue 7",
@@ -449,7 +463,14 @@ const clues = [
         set: "set3",
         title: "Clue 7",
         type: "document",
-        hintText: "The lock remembers where you began",
+        hintText: `A guarded door now waits in silence,
+                Its secret hidden behind a line of defiance.
+                You could chase new words and wander around,
+                Or seek what was lost on familiar ground.
+                The trail you followed may hold a key,
+                In something you passed without letting it be.
+                What once helped you move from one place to another,
+                May now be the word that unlocks the other.`,
         assets: [
             {
                 name: "clue 7",
